@@ -1,0 +1,938 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+int Led_time  = 200;
+
+int MS1       = 5;              // MS1 pin
+int EN        = 4;              //Step motor sürücüsünün EN(ENABLE) pini
+int STEP      = 3;              //Step motor sürücüsünün STEP(ADIM) pini
+int DIR       = 2;              //Step motor sürücüsünün DIR(YÖN) pini
+int Step_ms   = 1;              //step motor adım süresi
+int AYH       = LOW;
+int YYH       = HIGH;
+
+int menu            = 1;        //case yapılarındaki menü değişkeni ilk değer 1.
+int aksiyon_durum   = 0;        // menü delerde aktif pasif durumu.
+int aksiyon2_durum  = 0;        // menü delerde aktif pasif durumu.
+
+int LMT       = 7;              // Limit swich pini
+int LMT_durum = 0;              //Limit swich durumu
+
+int SW            = 6;          //joystic button pini
+int SW_durum      = 0;          //joystic button durumu
+int x_eksen_deger;              //joystic x-eksen değişkeni
+int x_eksen_pin   = A0;         //joystic x-eksen pini
+
+int toplam_dip_sayisi = 5;      //toplam dip sayısı için değişken
+int guncel_dip_sayisi = 1;      //güncel dip sayısı için değişken
+
+unsigned long  hava_suresi  = 10;        //soğutmada - havada bekleme süresi
+unsigned long  solusyon_suresi = 1;        //solüsyonda bekleme süresi
+unsigned long  firin_suresi    = 20;        //fırında bekleme süresi
+
+int masaustu_D    = 1;          //masaüstü menüsü için değişken
+int updateMenu_D  = 0;          //ayar menüsü için değişken
+
+//dip döngüsü için kulanılan değişkenler
+boolean dip_durum     = false;
+int toplam_mesafe     = 4500;    //en üst noktadan en alt noktaya olan mesafe
+int firin_hava_mesafe = 3000;    //firin ortasından (en üst nokta) kuruma pozisyonu/numune değişme pozisyonuna olan mesafe
+int hava_sol_mesafe   = 1500;    //kuruma pozisyonu/numune değişme pozisyonudan solüsyon dalmaya olan mesafe
+
+boolean komut_basla   = false;
+int konum_hava;
+boolean bekleme_hava  = false;
+int konum_sol;
+boolean bekleme_sol   = false;
+int konum_firin;
+boolean bekleme_firin = false;
+
+boolean sifirlama_durum = false;
+boolean numune_yerlestirme_konum = false;
+
+//unsigned long eskiZaman = 0;
+unsigned long ilk_zaman   = 0;
+unsigned long gecen_zaman = 0;
+
+int ilk_hareket   = 0;
+
+//alt switch olarak mesafe sensörü kullanımı
+int trigPin       = 8;        // mesafe sensörü trig pin
+int echoPin       = 9;        // mesafe sensörü echo pin
+long sure;                    // mesafe sensörü süre değişkeni
+long uzaklik;                 // mesafe sensörü uzaklık değişkeni
+
+int buzzer_Pin    = 10;       //buzzer giriş pini
+
+unsigned long  bekleme_1;
+unsigned long  bekleme_2;
+unsigned long  bekleme_3;
+
+
+void setup() {
+  pinMode(x_eksen_pin, INPUT);                  // DIR pinini çıkış olarak ayarlıyoruz
+  pinMode(LMT, INPUT);                          // DIR pinini çıkış olarak ayarlıyoruz
+  pinMode(DIR, OUTPUT);                         // DIR pinini çıkış olarak ayarlıyoruz
+  pinMode(STEP, OUTPUT);                        // STEP pinini çıkış olarak ayarlıyoruz
+  pinMode(EN, OUTPUT);                        // EN pinini çıkış olarak ayarlıyoruz
+  pinMode(MS1, OUTPUT);                        // EN pinini çıkış olarak ayarlıyoruz
+  digitalWrite(EN, LOW);                       // EN pinini LOW yapıyoruz ki modül çalışmaya başlasın
+  digitalWrite(MS1, HIGH);                      // EN pinini LOW yapıyoruz ki modül çalışmaya başlasın
+
+  pinMode(SW, INPUT_PULLUP);                   //Joystic buttpn girişi
+  pinMode(13, OUTPUT);                         //Led
+
+  pinMode(trigPin, OUTPUT);                      // mesafe sensörü trig pini çıkışı
+  pinMode(echoPin, INPUT);                      //  mesafe sensörü echo pini girişi
+
+  pinMode(buzzer_Pin, OUTPUT);                  //  buzzer pini çıkışı
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Dipper_V0");
+  delay(500);
+
+  lcd.clear();
+  masaustu();
+
+  Serial.begin(9600);
+
+}
+
+void loop() {
+
+  while (masaustu_D == 1) {
+
+    aksiyon2_durum = 0;
+    x_eksen_deger = analogRead(x_eksen_pin);                                // joystick X-axis veri oku
+    SW_durum = digitalRead(SW);                                             //buton durumu oku
+
+    //--------------------------joystic aşağı-menu aşağı
+    if (x_eksen_deger > 590)                                                //default değer 540
+    {
+      menu++;
+      masaustu();
+      delay(200);
+    }
+
+    //--------------------------joystic yukarı-menu yukarı
+    if (x_eksen_deger < 490)                                                //default değer 490
+    {
+      menu--;
+      masaustu();
+      delay(200);
+    }
+
+    //--------------------------joystic buton seçme
+    if (SW_durum == 0)
+    {
+      execute_masaustu_aksiyon();
+      if (masaustu_D == 1)
+        masaustu();
+      else
+        updateMenu();
+      delay(200);
+    }
+  }
+
+  //------------------------------menü döngüsünde hareket için
+  while (updateMenu_D == 1) {
+
+    aksiyon_durum = 0;
+    x_eksen_deger = analogRead(x_eksen_pin);                                // joystick X-axis veri oku
+    SW_durum = digitalRead(SW);                                             //buton durumu oku
+
+    //--------------------------joystic aşağı-menu aşağı
+    if (x_eksen_deger > 590)                                                //default değer 540
+    {
+      menu++;
+      updateMenu();
+      delay(200);
+    }
+    //--------------------------joystic yukarı-menu yukarı
+    if (x_eksen_deger < 490)                                                //default değer 490
+    {
+      menu--;
+      updateMenu();
+      delay(200);
+    }
+    //--------------------------joystic buton seçme
+    if (SW_durum == 0)
+    {
+      execute_menu_aksiyon();
+      if (updateMenu_D == 1)
+        updateMenu();
+      else
+        masaustu();
+      delay(200);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------İlk ekran
+void masaustu() {
+  switch (menu) {
+    case 0:
+      menu = 1;
+      break;
+    case 1:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("-------DiPPER-------");
+      lcd.setCursor(0, 2);
+      lcd.print(">Ayarlar");
+      lcd.setCursor(8, 3);
+      lcd.print(" iNFO");
+      lcd.setCursor(13, 2);
+      lcd.print(" BASLAT");
+      break;
+    case 2:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("-------DiPPER-------");
+      lcd.setCursor(0, 2);
+      lcd.print(" Ayarlar");
+      lcd.setCursor(8, 3);
+      lcd.print(">iNFO");
+      lcd.setCursor(13, 2);
+      lcd.print(" BASLAT");
+      break;
+    case 3:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("-------DiPPER-------");
+      lcd.setCursor(0, 2);
+      lcd.print(" Ayarlar");
+      lcd.setCursor(8, 3);
+      lcd.print(" iNFO");
+      lcd.setCursor(13, 2);
+      lcd.print(">BASLAT");
+      break;
+    case 4:
+      menu = 3;
+      break;
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------masustune bağlı aksiyonlar
+void execute_masaustu_aksiyon() {
+  switch (menu) {
+    case 1:
+      updateMenu_D = 1;
+      masaustu_D = 0;
+      delay(100);
+      updateMenu();
+      delay(100);
+      break;
+    case 2:
+      delay(300);
+      lcd.clear();
+      info_fonk();
+      delay(100);
+      masaustu();
+      delay(100);
+      menu = 2;
+      break;
+    case 3:
+      delay(300);
+      dip_durum = true;
+      dip_baslat();
+      delay(100);
+      masaustu();
+      delay(100);
+      menu = 3;
+      break;
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------bip döngüsü başlat--------------------------------------------------------------------------------
+void dip_baslat() {
+  //  bekleme_1 = solusyon_suresi * 1000;
+  //  bekleme_2 = firin_suresi * 1000;
+  //  bekleme_3 = hava_suresi * 1000;
+  //    bekleme_1 = 10000;
+  //    bekleme_2 = 20000;
+  //    bekleme_3 = 25000;
+
+  //  zero();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SIFIR KONUM BULUNUYR");
+  //  ilerle(AYH, 2, firin_hava_mesafe);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("      DiPPiNG      ");
+  delay(500);
+
+  while (dip_durum == true) {
+    lcd.setCursor(0, 1);
+    lcd.print("Total=");
+    lcd.print(toplam_dip_sayisi);
+    lcd.setCursor(10, 1);
+    lcd.print("Aktif=");
+    lcd.print(guncel_dip_sayisi);
+    lcd.setCursor(0, 2);
+    lcd.print("Zaman=");
+    lcd.print("0 ");
+    lcd.setCursor(10, 2);
+    lcd.print(" s");
+
+
+    //------bekleme konumundan solüsyona dalış
+    if (ilk_hareket == 0) {
+//      lcd.setCursor(0, 3);
+//      lcd.print("yon = 0");
+      ilerle(AYH, 2, hava_sol_mesafe);
+      bekleme_sol = !bekleme_sol;
+      gecen_zaman = 0;
+      gecen_zaman = millis();
+    }
+
+    //------solüsyonda bekleme ve sonraki adıma hazırlık
+    while (ilk_hareket == 0 && bekleme_sol == true) {
+      Serial.println("ilk hareket 0 bekleme sol true");
+      SW_durum = digitalRead(SW);         //buton durumu oku
+      lcd.setCursor(0, 2);
+      lcd.print("Zaman= ");
+      lcd.print((millis() - gecen_zaman) / 1000);
+      lcd.print("  saniye");
+      delay(100);
+      if (SW_durum == 0 || millis() - gecen_zaman > (solusyon_suresi * 1000)) {
+        bekleme_sol = !bekleme_sol;
+        ilk_hareket = 1;
+        delay(50);
+      }
+      SW_durum = digitalRead(SW);
+    }
+
+    //------solüsyon konumundan fırına çıkış
+    if (ilk_hareket == 1) {
+//      lcd.setCursor(0, 3);
+//      lcd.print("yon = 1");
+      ilerle(YYH, 2, toplam_mesafe);
+      bekleme_firin = !bekleme_firin;
+      gecen_zaman = 0;
+      gecen_zaman = millis();
+    }
+
+    //------solüsyonda bekleme ve sonraki adıma hazırlık
+    while (ilk_hareket == 1 && bekleme_firin == true) {
+      Serial.println("ilk hareket 1 bekleme firin true");
+      SW_durum = digitalRead(SW);         //buton durumu oku
+      lcd.setCursor(0, 2);
+      lcd.print("Zaman= ");
+      lcd.print((millis() - gecen_zaman) / 1000);
+      lcd.print("  saniye");
+      delay(100);
+      if (SW_durum == 0 || millis() - gecen_zaman > (firin_suresi * 1000)) {
+        bekleme_firin = !bekleme_firin;
+        ilk_hareket = 2;
+        delay(50);
+      }
+      SW_durum = digitalRead(SW);
+    }
+
+    //------solüsyon konumundan fırına çıkış
+    if (ilk_hareket == 2) {
+//      lcd.setCursor(0, 3);
+//      lcd.print("yon = 2");
+      ilerle(AYH, 2, firin_hava_mesafe);
+      bekleme_hava = !bekleme_hava;
+      gecen_zaman = 0;
+      gecen_zaman = millis();
+    }
+
+    //------solüsyonda bekleme ve sonraki adıma hazırlık
+    while (ilk_hareket == 2 && bekleme_hava == true) {
+      Serial.println("ilk hareket 2 bekleme hava true");
+      SW_durum = digitalRead(SW);         //buton durumu oku
+      lcd.setCursor(0, 1);
+      lcd.print("Sure = ");
+      lcd.print((millis() - gecen_zaman) / 1000);
+      lcd.print("  saniye");
+      delay(100);
+      if (SW_durum == 0 || millis() - gecen_zaman > (hava_suresi * 1000)) {
+        bekleme_hava = !bekleme_hava;
+        ilk_hareket = 3;
+        delay(50);
+      }
+      SW_durum = digitalRead(SW);
+    }
+
+    //1 dip tamamlandığından sonraki dipe geçiş
+    if (ilk_hareket == 3 && guncel_dip_sayisi < toplam_dip_sayisi) {
+      gecen_zaman = 0;
+      guncel_dip_sayisi = guncel_dip_sayisi + 1;
+      ilk_hareket = 0;
+      delay(100);
+    }
+
+    //tüm dipler tamamlandığından dip işleminden çıkış
+    if (ilk_hareket == 3 && guncel_dip_sayisi == toplam_dip_sayisi) {
+      lcd.setCursor(0, 3);
+      lcd.print("yon = 5");
+      gecen_zaman = 0;
+      dip_durum = !dip_durum;
+      ilk_hareket = 0;
+      delay(200);
+    }
+  }
+
+  //buzzer aktifleştirilerek bitiş uyarısı verilecek
+  digitalWrite(buzzer_Pin, HIGH);
+  delay(1000);
+  digitalWrite(buzzer_Pin, LOW);
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------info ekranı
+void info_fonk() {
+  lcd.setCursor(0, 0);
+  lcd.print("        iNFO        ");
+  lcd.setCursor(0, 1);
+  lcd.print(" Dip-Coating machine ");
+  lcd.setCursor(0, 2);
+  lcd.print("Designed, programmed");
+  lcd.setCursor(0, 3);
+  lcd.print("   by BKTECH ARGE   ");
+  for (int x = 0; x < 1000; x++) { // Motorumuzu 1000 adım ileri döndürüyoruz
+    SW_durum = digitalRead(SW);
+    delay(20);
+
+    if (SW_durum == 0)
+    {
+      x = 1000;
+      delay(100);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------ana menü
+
+void updateMenu() {
+
+  switch (menu) {
+    case 0:
+      menu = 1;
+      break;
+    case 1:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(">Toplam Dip");
+      lcd.setCursor(0, 1);
+      lcd.print(" Dip Hizi");
+      lcd.setCursor(0, 2);
+      lcd.print(" Sogutma Zamani");
+      lcd.setCursor(0, 3);
+      lcd.print(" Solusyon Zamani");
+      break;
+    case 2:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(" Toplam Dip");
+      lcd.setCursor(0, 1);
+      lcd.print(">Dip Hizi");
+      lcd.setCursor(0, 2);
+      lcd.print(" Sogutma Zamani");
+      lcd.setCursor(0, 3);
+      lcd.print(" Solusyon Zamani");
+      break;
+    case 3:
+      lcd.setCursor(0, 0);
+      lcd.print(" Toplam Dip");
+      lcd.setCursor(0, 1);
+      lcd.print(" Dip Hizi");
+      lcd.setCursor(0, 2);
+      lcd.print(">Sogutma Zamani");
+      lcd.setCursor(0, 3);
+      lcd.print(" Solusyon Zamani");
+      break;
+    case 4:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(" Toplam Dip");
+      lcd.setCursor(0, 1);
+      lcd.print(" Dip Hizi");
+      lcd.setCursor(0, 2);
+      lcd.print(" Sogutma Zamani");
+      lcd.setCursor(0, 3);
+      lcd.print(">Solusyon Zamani");
+      break;
+    case 5:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(">Firin Zamani");
+      lcd.setCursor(0, 1);
+      lcd.print(" Holder Sifirlama");
+      lcd.setCursor(0, 2);
+      lcd.print(" Manuel Hareket");
+      lcd.setCursor(0, 3);
+      lcd.print(" Cikis");
+      break;
+    case 6:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(" Firin Zamani");
+      lcd.setCursor(0, 1);
+      lcd.print(">Holder Sifirlama");
+      lcd.setCursor(0, 2);
+      lcd.print(" Manuel Hareket");
+      lcd.setCursor(0, 3);
+      lcd.print(" Cikis");
+      break;
+    case 7:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(" Firin Zamani");
+      lcd.setCursor(0, 1);
+      lcd.print(" Holder Sifirlama");
+      lcd.setCursor(0, 2);
+      lcd.print(">Manuel Hareket");
+      lcd.setCursor(0, 3);
+      lcd.print(" Cikis");
+      break;
+    case 8:
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(" Firin Zamani");
+      lcd.setCursor(0, 1);
+      lcd.print(" Holder Sifirlama");
+      lcd.setCursor(0, 2);
+      lcd.print(" Manuel Hareket");
+      lcd.setCursor(0, 3);
+      lcd.print(">Cikis");
+      break;
+    case 9:
+      menu = 8;
+      break;
+  }
+
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------ana menuye bağlı aksiyonlar
+void execute_menu_aksiyon() {
+  switch (menu) {
+    case 1:
+      aksiyon1();
+      break;
+    case 2:
+      aksiyon2();
+      break;
+    case 3:
+      aksiyon3();
+      break;
+    case 4:
+      aksiyon4();
+      break;
+    case 5:
+      aksiyon5();
+      break;
+    case 6:
+      aksiyon6();
+      break;
+    case 7:
+      aksiyon7();
+      break;
+    case 8:
+      aksiyon8();
+      break;
+
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------Alt menüler
+
+void aksiyon1() {
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(" TOPLAM DiP SAYISI");
+  toplam_dip();
+  delay(500);
+}
+void aksiyon2() {
+  while (aksiyon_durum == 0) {
+    delay(200);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("      DiP HIZI");
+    adim_Suresi();
+  }
+  // adim_Suresi();
+}
+void aksiyon3() {
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("   SOGUTMA SURESi");
+  sogutma_zamani_belirle();
+  delay(500);
+}
+void aksiyon4() {
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("  SOLUSYON SURESi");
+  solusyon_zamani_belirle();
+  delay(500);
+}
+void aksiyon5() {
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("    FIRIN SURESi");
+  firin_zamani_belirle();
+  delay(500);
+}
+
+void aksiyon6() {
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("  HOLDER SIFIRLAMA");
+  lcd.setCursor(0, 1);
+  lcd.print("Sifirlama yapiliyor");
+  zero();
+  delay(100);
+  numune_yerlestirme();
+  delay(1500);
+}
+void aksiyon7() {
+
+  while (aksiyon_durum == 0) {
+    delay(200);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("   MANUEL HAREKET");
+    lcd.setCursor(0, 1);
+    lcd.print("Manuel kontrolde");
+    lcd.setCursor(0, 2);
+    lcd.print("     dikkatli olun!!");
+    Step_motor();
+    Serial.println(SW_durum);
+    //Step_motor();
+
+  }
+}
+void aksiyon8() {
+
+  if (SW_durum == 0)
+  {
+    updateMenu_D = 0;
+    masaustu_D = 1;
+    masaustu();
+    delay(100);
+    lcd.clear();
+    menu = 1;//bu olmadan menu sayısı masaustunden yuksek oldugu ıcın ekranda göstermıyor menuyu
+  }
+
+}
+
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------Step motor hareket
+void Step_motor() {
+  while (aksiyon_durum == 0) {
+
+    SW_durum = digitalRead(SW);         //buton durumu oku
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick X-axis veri oku
+    if (x_eksen_deger < 490)
+    {
+      ilerle(YYH, 2, 1);
+    }
+
+    if (x_eksen_deger > 540)
+    {
+      ilerle(AYH, 2, 1);
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(50);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------step motor sıfırlama
+void zero()
+{
+  int sifir_poz_ilk = 0;
+  while (LMT_durum == 0) {
+    LMT_durum = digitalRead(LMT);
+    ilerle(YYH, 2, 10);
+    if (LMT_durum == 1) {
+      sifir_poz_ilk = 1;
+      delay(200);
+    }
+
+  }
+
+  while (sifir_poz_ilk == 1 || sifir_poz_ilk == 2) {  //tek seferlik iki adım ters yönde switchten uzaklaşma
+    ilerle(AYH, 10, 1);
+    sifir_poz_ilk++;
+  }
+
+  //en üst noktaya gelindiğinden sıfır alınır ve mesafeler adım sayılarına göre ilerletilir.
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  lcd.print("  Sifirlama bitti  ");
+  sifirlama_durum = true;
+  delay(1000);
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------step motor sıfırlama
+void numune_yerlestirme()
+{
+  lcd.clear();
+  lcd.setCursor(0, 2);
+  lcd.print("Numune yerlestirme");
+  lcd.setCursor(0, 3);
+  lcd.print("  konumuna gidiliyor");
+  ilerle(AYH, 2, firin_hava_mesafe);
+  konum_hava = 0;
+  numune_yerlestirme_konum = true;
+  delay(1000);
+
+  if (SW_durum == 0)
+  {
+    aksiyon_durum = 1;
+    LMT_durum = 0;
+    delay(100);
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------adım süresi
+void adim_Suresi() {
+  while (aksiyon_durum == 0) {
+    SW_durum = digitalRead(SW);         //buton durumu oku
+
+    lcd.setCursor(0, 1);
+    lcd.print("Dip hizi= ");
+    if (Step_ms < 10) {
+      lcd.print("00");
+      lcd.print(Step_ms);
+    }
+    else if (Step_ms < 100) {
+      lcd.print("0");
+      lcd.print(Step_ms);
+    }
+    else if (Step_ms > 100) {
+      lcd.print(Step_ms);
+    }
+
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick y-axis veri oku
+    if (x_eksen_deger < 490)
+    {
+      Step_ms = Step_ms + 50;
+      delay(200);
+    }
+    if (x_eksen_deger > 590)
+    {
+      Step_ms = Step_ms - 50;
+      delay(200);
+    }
+    if (Step_ms < 1)
+    {
+      Step_ms = 1;
+    }
+    if (Step_ms > 201)
+    {
+      Step_ms = 201;
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(100);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------toplam_dip_sayisi
+void toplam_dip() {
+
+  while (aksiyon_durum == 0) {
+    SW_durum = digitalRead(SW);         //buton durumu oku
+
+    lcd.setCursor(5, 2);
+    if (toplam_dip_sayisi < 10) {
+      lcd.print("00");
+      lcd.print(toplam_dip_sayisi);
+    }
+    else if (toplam_dip_sayisi < 100) {
+      lcd.print("0");
+      lcd.print(toplam_dip_sayisi);
+    }
+    else if (toplam_dip_sayisi > 100) {
+      lcd.print(toplam_dip_sayisi);
+    }
+    lcd.setCursor(11, 2);
+    lcd.print("dip");
+
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick y-axis veri oku
+    if (x_eksen_deger < 490)
+    {
+      toplam_dip_sayisi++;
+      delay(200);
+    }
+    if (x_eksen_deger > 590)
+    {
+      toplam_dip_sayisi--;
+      delay(200);
+    }
+    if (toplam_dip_sayisi < 1)
+    {
+      toplam_dip_sayisi = 1;
+    }
+    if (toplam_dip_sayisi > 100)
+    {
+      toplam_dip_sayisi = 100;
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(100);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------sogutma suresi
+void sogutma_zamani_belirle() {
+
+  while (aksiyon_durum == 0) {
+    SW_durum = digitalRead(SW);         //buton durumu oku
+
+    lcd.setCursor(5, 2);
+    lcd.print(hava_suresi);
+    lcd.print("  ");
+    lcd.setCursor(9, 2);
+    lcd.print("saniye");
+
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick y-axis veri oku
+    if (x_eksen_deger < 490)
+    {
+      hava_suresi = hava_suresi + 10;
+      delay(200);
+    }
+    if (x_eksen_deger > 590)
+    {
+      hava_suresi = hava_suresi - 10;
+      delay(200);
+    }
+    if (hava_suresi > 600)
+    {
+      hava_suresi = 600;
+    }
+    if (hava_suresi < 0)
+    {
+      hava_suresi = 0;
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(100);
+    }
+  }
+
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------solusyon suresi
+void solusyon_zamani_belirle() {
+
+  while (aksiyon_durum == 0) {
+    SW_durum = digitalRead(SW);         //buton durumu oku
+
+    lcd.setCursor(5, 2);
+    lcd.print(solusyon_suresi);
+    lcd.print("  ");
+    lcd.setCursor(9, 2);
+    lcd.print("saniye");
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick y-axis veri oku
+    if (x_eksen_deger < 450)
+    {
+      solusyon_suresi = solusyon_suresi + 10;
+      delay(200);
+    }
+    if (x_eksen_deger > 590)
+    {
+      solusyon_suresi = solusyon_suresi - 10;
+      delay(200);
+    }
+    if (solusyon_suresi > 600)
+    {
+      solusyon_suresi = 600;
+    }
+    if (solusyon_suresi < 0)
+    {
+      solusyon_suresi = 0;
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(100);
+    }
+  }
+}
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------firin suresi
+void firin_zamani_belirle() {
+
+  while (aksiyon_durum == 0) {
+    SW_durum = digitalRead(SW);         //buton durumu oku
+
+    lcd.setCursor(5, 2);
+    lcd.print(firin_suresi);
+    lcd.print("  ");
+    lcd.setCursor(9, 2);
+    lcd.print("saniye");
+
+    x_eksen_deger = analogRead(x_eksen_pin); // joystick y-axis veri oku
+    if (x_eksen_deger < 490)
+    {
+      firin_suresi = firin_suresi + 10;
+      delay(200);
+    }
+    else if (x_eksen_deger > 590)
+    {
+      firin_suresi = firin_suresi - 10;
+      delay(200);
+    }
+    if (firin_suresi > 600)
+    {
+      firin_suresi = 600;
+    }
+    if (firin_suresi < 0)
+    {
+      firin_suresi = 0;
+    }
+    if (SW_durum == 0)
+    {
+      aksiyon_durum = 1;
+      delay(100);
+    }
+  }
+}
+
+//--------------------------------------------------------------------
+//--------------------------------------------------------------------led yak
+
+void ledYak() {
+  for (int x = 0; x < 4; x++) {
+    digitalWrite(13, HIGH);
+    delay(Led_time);
+    digitalWrite(13, LOW);
+    delay(Led_time);
+
+  }
+}
+void ilerle(int yon, int yondeki_adim, int defa) {
+
+  for (int i = 0; i < defa; i++) {
+
+    digitalWrite(DIR, yon);              // Motor yönünü aşağı olarak ayarlıyoruz
+    digitalWrite(STEP, HIGH);
+    delay(yondeki_adim);
+    digitalWrite(STEP, LOW);
+    delay(yondeki_adim);
+  }
+}
